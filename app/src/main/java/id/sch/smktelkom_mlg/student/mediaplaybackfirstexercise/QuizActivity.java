@@ -24,8 +24,9 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.support.v4.content.ContextCompat;
+import android.support.v4.media.session.MediaSessionCompat;
+import android.support.v4.media.session.PlaybackStateCompat;
 import android.support.v7.app.AppCompatActivity;
-import android.util.Log;
 import android.view.View;
 import android.widget.Button;
 import android.widget.Toast;
@@ -64,6 +65,8 @@ public class QuizActivity extends AppCompatActivity implements View.OnClickListe
     private Button[] mButtons;
     private SimpleExoPlayer mExoPlayer;
     private SimpleExoPlayerView mPlayerView;
+    private MediaSessionCompat mMediaSession;
+    private PlaybackStateCompat.Builder mStateBuilder;
 
 
     @Override
@@ -71,8 +74,10 @@ public class QuizActivity extends AppCompatActivity implements View.OnClickListe
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_quiz);
 
-        // TODO (2): Replace the ImageView with the SimpleExoPlayerView, and remove the method calls on the composerView.
+
+        // Initialize the player view.
         mPlayerView = (SimpleExoPlayerView) findViewById(R.id.playerView);
+
 
         boolean isNewGame = !getIntent().hasExtra(REMAINING_SONGS_KEY);
 
@@ -93,10 +98,10 @@ public class QuizActivity extends AppCompatActivity implements View.OnClickListe
         mQuestionSampleIDs = QuizUtils.generateQuestion(mRemainingSampleIDs);
         mAnswerSampleID = QuizUtils.getCorrectAnswerID(mQuestionSampleIDs);
 
-        // TODO (3): Replace the default artwork in the SimpleExoPlayerView with the question mark drawable.
-        // Load the image of the composer for the answer into the ImageView.
+        // Load the question mark as the background image until the user answers the question.
         mPlayerView.setDefaultArtwork(BitmapFactory.decodeResource
                 (getResources(), R.drawable.question_mark));
+
         // If there is only one answer left, end the game.
         if (mQuestionSampleIDs.size() < 2) {
             QuizUtils.endGame(this);
@@ -106,8 +111,11 @@ public class QuizActivity extends AppCompatActivity implements View.OnClickListe
         // Initialize the buttons with the composers names.
         mButtons = initializeButtons(mQuestionSampleIDs);
 
+        // Initialize the Media Session.
+        initializeMediaSession();
 
         Sample answerSample = Sample.getSampleByID(this, mAnswerSampleID);
+
         if (answerSample == null) {
             Toast.makeText(this, getString(R.string.sample_not_found_error),
                     Toast.LENGTH_SHORT).show();
@@ -117,15 +125,42 @@ public class QuizActivity extends AppCompatActivity implements View.OnClickListe
         // Initialize the player.
         initializePlayer(Uri.parse(answerSample.getUri()));
     }
-    // TODO (4): Create a Sample object using the Sample.getSampleByID() method and passing in mAnswerSampleID;
-    // TODO (5): Create a method called initializePlayer() that takes a Uri as an argument and call it here, passing in the Sample URI.
+
+    /**
+     * Initializes the Media Session to be enabled with media buttons, transport controls, callbacks
+     * and media controller.
+     */
+    private void initializeMediaSession() {
+
+        // Create a MediaSessionCompat.
+        mMediaSession = new MediaSessionCompat(this, TAG);
+
+        // Enable callbacks from MediaButtons and TransportControls.
+        mMediaSession.setFlags(
+                MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS |
+                        MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS);
+
+        // Do not let MediaButtons restart the player when the app is not visible.
+        mMediaSession.setMediaButtonReceiver(null);
+
+        // Set an initial PlaybackState with ACTION_PLAY, so media buttons can start the player.
+        mStateBuilder = new PlaybackStateCompat.Builder()
+                .setActions(
+                        PlaybackStateCompat.ACTION_PLAY |
+                                PlaybackStateCompat.ACTION_PAUSE |
+                                PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS |
+                                PlaybackStateCompat.ACTION_PLAY_PAUSE);
+
+        mMediaSession.setPlaybackState(mStateBuilder.build());
 
 
-    // In initializePayer
-    // TODO (6): Instantiate a SimpleExoPlayer object using DefaultTrackSelector and DefaultLoadControl.
-    // TODO (7): Prepare the MediaSource using DefaultDataSourceFactory and DefaultExtractorsFactory, as well as the Sample URI you passed in.
-    // TODO (8): Prepare the ExoPlayer with the MediaSource, start playing the sample and set the SimpleExoPlayer to the SimpleExoPlayerView.
+        // MySessionCallback has methods that handle callbacks from a media controller.
+        mMediaSession.setCallback(new MySessionCallback());
 
+        // Start the Media Session since the activity is active.
+        mMediaSession.setActive(true);
+
+    }
 
     /**
      * Initializes the button to the correct views, and sets the text to the composers names,
@@ -148,6 +183,12 @@ public class QuizActivity extends AppCompatActivity implements View.OnClickListe
         return buttons;
     }
 
+
+    /**
+     * Initialize ExoPlayer.
+     *
+     * @param mediaUri The URI of the sample to play.
+     */
     private void initializePlayer(Uri mediaUri) {
         if (mExoPlayer == null) {
             // Create an instance of the ExoPlayer.
@@ -156,7 +197,9 @@ public class QuizActivity extends AppCompatActivity implements View.OnClickListe
             mExoPlayer = ExoPlayerFactory.newSimpleInstance(this, trackSelector, loadControl);
             mPlayerView.setPlayer(mExoPlayer);
 
+            // Set the ExoPlayer.EventListener to this activity.
             mExoPlayer.addListener(this);
+
             // Prepare the MediaSource.
             String userAgent = Util.getUserAgent(this, "ClassicalMusicQuiz");
             MediaSource mediaSource = new ExtractorMediaSource(mediaUri, new DefaultDataSourceFactory(
@@ -175,6 +218,7 @@ public class QuizActivity extends AppCompatActivity implements View.OnClickListe
         mExoPlayer.release();
         mExoPlayer = null;
     }
+
 
     /**
      * The OnClick method for all of the answer buttons. The method uses the index of the button
@@ -221,7 +265,6 @@ public class QuizActivity extends AppCompatActivity implements View.OnClickListe
         handler.postDelayed(new Runnable() {
             @Override
             public void run() {
-                // TODO (9): Stop the playback when you go to the next question.
                 mExoPlayer.stop();
                 Intent nextQuestionIntent = new Intent(QuizActivity.this, QuizActivity.class);
                 nextQuestionIntent.putExtra(REMAINING_SONGS_KEY, mRemainingSampleIDs);
@@ -229,20 +272,19 @@ public class QuizActivity extends AppCompatActivity implements View.OnClickListe
                 startActivity(nextQuestionIntent);
             }
         }, CORRECT_ANSWER_DELAY_MILLIS);
-
     }
 
     /**
-     * Disables the buttons and changes the background colors to show the correct answer.
+     * Disables the buttons and changes the background colors and player art to
+     * show the correct answer.
      */
     private void showCorrectAnswer() {
         mPlayerView.setDefaultArtwork(Sample.getComposerArtBySampleID(this, mAnswerSampleID));
-
         for (int i = 0; i < mQuestionSampleIDs.size(); i++) {
             int buttonSampleID = mQuestionSampleIDs.get(i);
 
-            // TODO (10): Change the default artwork in the SimpleExoPlayerView to show the picture of the composer, when the user has answered the question.
             mButtons[i].setEnabled(false);
+
             if (buttonSampleID == mAnswerSampleID) {
                 mButtons[i].getBackground().setColorFilter(ContextCompat.getColor
                                 (this, android.R.color.holo_green_light),
@@ -253,18 +295,22 @@ public class QuizActivity extends AppCompatActivity implements View.OnClickListe
                                 (this, android.R.color.holo_red_light),
                         PorterDuff.Mode.MULTIPLY);
                 mButtons[i].setTextColor(Color.WHITE);
-
             }
         }
     }
 
-    // TODO (11): Override onDestroy() to stop and release the player when the Activity is destroyed.
+
+    /**
+     * Release the player when the activity is destroyed.
+     */
     @Override
     protected void onDestroy() {
         super.onDestroy();
         releasePlayer();
+        mMediaSession.setActive(false);
     }
-    // TODO (3): Add conditional logging statements to the onPlayerStateChanged() method that log when ExoPlayer is playing or paused.
+
+
     // ExoPlayer Event Listeners
 
     @Override
@@ -279,13 +325,23 @@ public class QuizActivity extends AppCompatActivity implements View.OnClickListe
     public void onLoadingChanged(boolean isLoading) {
     }
 
+    /**
+     * Method that is called when the ExoPlayer state changes. Used to update the MediaSession
+     * PlayBackState to keep in sync.
+     * @param playWhenReady true if ExoPlayer is playing, false if it's paused.
+     * @param playbackState int describing the state of ExoPlayer. Can be STATE_READY, STATE_IDLE,
+     *                      STATE_BUFFERING, or STATE_ENDED.
+     */
     @Override
     public void onPlayerStateChanged(boolean playWhenReady, int playbackState) {
         if ((playbackState == ExoPlayer.STATE_READY) && playWhenReady) {
-            Log.d(TAG, "onPlayerStateChanged: PLAYING");
+            mStateBuilder.setState(PlaybackStateCompat.STATE_PLAYING,
+                    mExoPlayer.getCurrentPosition(), 1f);
         } else if ((playbackState == ExoPlayer.STATE_READY)) {
-            Log.d(TAG, "onPlayerStateChanged: PAUSED");
+            mStateBuilder.setState(PlaybackStateCompat.STATE_PAUSED,
+                    mExoPlayer.getCurrentPosition(), 1f);
         }
+        mMediaSession.setPlaybackState(mStateBuilder.build());
     }
 
     @Override
@@ -294,5 +350,25 @@ public class QuizActivity extends AppCompatActivity implements View.OnClickListe
 
     @Override
     public void onPositionDiscontinuity() {
+    }
+
+    /**
+     * Media Session Callbacks, where all external clients control the player.
+     */
+    private class MySessionCallback extends MediaSessionCompat.Callback {
+        @Override
+        public void onPlay() {
+            mExoPlayer.setPlayWhenReady(true);
+        }
+
+        @Override
+        public void onPause() {
+            mExoPlayer.setPlayWhenReady(false);
+        }
+
+        @Override
+        public void onSkipToPrevious() {
+            mExoPlayer.seekTo(0);
+        }
     }
 }
